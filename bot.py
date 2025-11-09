@@ -39,12 +39,20 @@ class MoneroBot:
         self.setup_handlers()
 
     def setup_handlers(self):
+        # Add error handler first
+        self.application.add_error_handler(self.error_handler)
+        
+        # Then add your other handlers
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("products", self.show_products))
         self.application.add_handler(CommandHandler("orders", self.show_orders))
         self.application.add_handler(CommandHandler("cancel", self.cancel_operation))
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+
+    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle errors gracefully"""
+        logger.error(f"Update {update} caused error {context.error}")
 
     def get_user_state(self, user_id: int) -> Dict[str, Any]:
         if user_id not in self.user_states:
@@ -527,19 +535,26 @@ async def lifespan(app: FastAPI):
     # Startup
     seed_products()
     
+    # ✅ INITIALIZE THE BOT PROPERLY
+    await bot.application.initialize()
+    await bot.application.start()
+    
     # Set webhook for production
     webhook_url = os.getenv("WEBHOOK_URL")
     if webhook_url:
         await bot.application.bot.set_webhook(webhook_url)
-        logger.info(f"Webhook set to: {webhook_url}")
+        logger.info(f"✅ Webhook set to: {webhook_url}")
     else:
         logger.warning("No WEBHOOK_URL set - using getUpdates")
+    
+    logger.info("✅ Bot initialized and ready!")
     
     yield  # App runs here
     
     # Shutdown
     if bot.application.running:
         await bot.application.shutdown()
+        await bot.application.stop()
     logger.info("Bot shutdown complete.")
 
 # -------------------------
@@ -559,17 +574,20 @@ async def webhook(request: Request):
     """Handle incoming Telegram updates via webhook"""
     try:
         data = await request.json()
-        logger.info(f"📨 Webhook received from Telegram: {data}")
+        logger.info(f"📨 WEBHOOK RECEIVED - Update ID: {data.get('update_id')}")
         
         update = Update.de_json(data, bot.application.bot)
-        logger.info(f"🔄 Processing update: {update.update_id}")
+        
+        if update.message:
+            logger.info(f"💬 Message from {update.effective_user.id}: {update.message.text}")
+        elif update.callback_query:
+            logger.info(f"🔘 Callback from {update.effective_user.id}: {update.callback_query.data}")
         
         await bot.application.process_update(update)
-        
-        logger.info("✅ Webhook processed successfully")
+        logger.info("✅ Update processed successfully")
         return {"status": "ok"}
     except Exception as e:
-        logger.error(f"❌ Webhook error: {e}")
+        logger.error(f"❌ Webhook error: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 # For local development with polling
