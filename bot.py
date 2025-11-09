@@ -5,7 +5,9 @@ import logging
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Any
+from contextlib import asynccontextmanager
 
+from fastapi import FastAPI, Request, HTTPException
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -518,13 +520,55 @@ def seed_products():
             logger.info("✅ Products already exist.")
 
 # -------------------------
-# Main function to run the bot
+# FastAPI Lifespan Events
 # -------------------------
-def main():
-    # Seed products
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     seed_products()
     
-    # Start the bot with polling using the new method
+    # Set webhook for production
+    webhook_url = os.getenv("WEBHOOK_URL")
+    if webhook_url:
+        await bot.application.bot.set_webhook(webhook_url)
+        logger.info(f"Webhook set to: {webhook_url}")
+    else:
+        logger.warning("No WEBHOOK_URL set - using getUpdates")
+    
+    yield  # App runs here
+    
+    # Shutdown
+    if bot.application.running:
+        await bot.application.shutdown()
+    logger.info("Bot shutdown complete.")
+
+# -------------------------
+# FastAPI app
+# -------------------------
+app = FastAPI(title="Pharmacy Telegram Bot", lifespan=lifespan)
+
+# -------------------------
+# FastAPI Routes
+# -------------------------
+@app.get("/")
+async def healthcheck():
+    return {"status": "ok", "message": "Pharmacy Telegram Bot is running."}
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    """Handle incoming Telegram updates via webhook"""
+    try:
+        data = await request.json()
+        update = Update.de_json(data, bot.application.bot)
+        await bot.application.process_update(update)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"status": "error", "message": str(e)}
+
+# For local development with polling
+def main():
+    seed_products()
     logger.info("Starting bot with polling...")
     
     async def run_bot():
@@ -536,10 +580,14 @@ def main():
         
         # Keep the bot running
         while True:
-            await asyncio.sleep(3600)  # Sleep for 1 hour
+            await asyncio.sleep(3600)
     
-    # Run the bot
     asyncio.run(run_bot())
-app = "This is a polling bot, not a web app"
+
 if __name__ == "__main__":
-    main()
+    # If running locally, use polling. If deployed, use webhooks.
+    if os.getenv("RENDER") or os.getenv("WEBHOOK_URL"):
+        # This will be used in deployment
+        pass
+    else:
+        main()
