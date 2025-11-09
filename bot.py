@@ -540,6 +540,6 @@ def main():
     
     # Run the bot
     asyncio.run(run_bot())
-
+app = "This is a polling bot, not a web app"
 if __name__ == "__main__":
     main()
