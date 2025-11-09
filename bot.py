@@ -559,11 +559,17 @@ async def webhook(request: Request):
     """Handle incoming Telegram updates via webhook"""
     try:
         data = await request.json()
+        logger.info(f"📨 Webhook received from Telegram: {data}")
+        
         update = Update.de_json(data, bot.application.bot)
+        logger.info(f"🔄 Processing update: {update.update_id}")
+        
         await bot.application.process_update(update)
+        
+        logger.info("✅ Webhook processed successfully")
         return {"status": "ok"}
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error(f"❌ Webhook error: {e}")
         return {"status": "error", "message": str(e)}
 
 # For local development with polling
