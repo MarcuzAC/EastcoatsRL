@@ -19,6 +19,7 @@ class User(Base):
     
     # Relationships
     orders = relationship("Order", back_populates="user")
+    cart = relationship("Cart", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 class Product(Base):
     __tablename__ = 'products'
@@ -32,6 +33,8 @@ class Product(Base):
     
     # Relationships
     orders = relationship("Order", back_populates="product")
+    cart_items = relationship("CartItem", back_populates="product")
+    order_items = relationship("OrderItem", back_populates="product")
 
 class ShippingAddress(Base):
     __tablename__ = 'shipping_addresses'
@@ -47,15 +50,38 @@ class ShippingAddress(Base):
     # Relationships
     orders = relationship("Order", back_populates="shipping_address")
 
+class Cart(Base):
+    __tablename__ = 'carts'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="cart")
+    cart_items = relationship("CartItem", back_populates="cart", cascade="all, delete-orphan")
+
+class CartItem(Base):
+    __tablename__ = 'cart_items'
+    id = Column(Integer, primary_key=True)
+    cart_id = Column(Integer, ForeignKey('carts.id'), nullable=False)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    quantity = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    cart = relationship("Cart", back_populates="cart_items")
+    product = relationship("Product", back_populates="cart_items")
+
 class Order(Base):
     __tablename__ = 'orders'
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
     shipping_address_id = Column(Integer, ForeignKey('shipping_addresses.id'), nullable=False)
-    amount_xmr = Column(Float, nullable=False)
+    total_amount_xmr = Column(Float, nullable=False)  # Total for all items in order
     payment_address = Column(String, nullable=False)
     payment_id = Column(String)
+    payment_request = Column(Text)  # Store the full payment request
     status = Column(String, default='pending')  # pending, paid, confirmed, shipped, completed, expired
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
@@ -64,9 +90,21 @@ class Order(Base):
     
     # Relationships
     user = relationship("User", back_populates="orders")
-    product = relationship("Product", back_populates="orders")
     shipping_address = relationship("ShippingAddress", back_populates="orders")
     payments = relationship("Payment", back_populates="order")
+    order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+
+class OrderItem(Base):
+    __tablename__ = 'order_items'
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey('orders.id'), nullable=False)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    price_xmr = Column(Float, nullable=False)  # Price at time of order (snapshot)
+    
+    # Relationships
+    order = relationship("Order", back_populates="order_items")
+    product = relationship("Product", back_populates="order_items")
 
 class Payment(Base):
     __tablename__ = 'payments'
@@ -81,4 +119,8 @@ class Payment(Base):
     order = relationship("Order", back_populates="payments")
 
 # Create tables
-Base.metadata.create_all(engine)
+def init_db():
+    Base.metadata.create_all(engine)
+
+# Initialize database
+init_db()
