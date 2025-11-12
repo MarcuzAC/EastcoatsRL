@@ -31,8 +31,7 @@ class Product(Base):
     is_available = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Relationships
-    orders = relationship("Order", back_populates="product")
+    # Relationships - REMOVED the orders relationship since Order no longer has product_id
     cart_items = relationship("CartItem", back_populates="product")
     order_items = relationship("OrderItem", back_populates="product")
 
