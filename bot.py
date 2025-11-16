@@ -58,10 +58,16 @@ class XMRPrice:
 # -------------------------
 class MoneroBot:
     def __init__(self):
-        self.application = Application.builder().token(config.BOT_TOKEN).build()
+        self.application = None
         self.monero = MoneroHandler()
         self.user_states: Dict[int, Dict[str, Any]] = {}
-        self.setup_handlers()
+        self._is_running = False
+
+    async def initialize(self):
+        """Initialize the bot application"""
+        if self.application is None:
+            self.application = Application.builder().token(config.BOT_TOKEN).build()
+            self.setup_handlers()
 
     def setup_handlers(self):
         # Add error handler first
@@ -80,6 +86,36 @@ class MoneroBot:
         
         # Message handler
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+
+    async def start_webhook(self, webhook_url: str):
+        """Start the bot with webhook"""
+        await self.initialize()
+        await self.application.initialize()
+        await self.application.start()
+        
+        # Set webhook
+        await self.application.bot.set_webhook(webhook_url)
+        self._is_running = True
+        logger.info(f"✅ Webhook set to: {webhook_url}")
+
+    async def start_polling(self):
+        """Start the bot with polling"""
+        await self.initialize()
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.updater.start_polling()
+        self._is_running = True
+        logger.info("✅ Bot started with polling")
+
+    async def shutdown(self):
+        """Shutdown the bot properly"""
+        if self.application and self._is_running:
+            if self.application.updater and self.application.updater.running:
+                await self.application.updater.stop()
+            await self.application.stop()
+            await self.application.shutdown()
+            self._is_running = False
+            logger.info("✅ Bot shutdown complete")
 
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle errors gracefully"""
@@ -823,27 +859,29 @@ async def lifespan(app: FastAPI):
     # Startup
     seed_products()
     
-    # ✅ INITIALIZE THE BOT PROPERLY
-    await bot.application.initialize()
-    await bot.application.start()
+    # Get port from environment (Render sets this)
+    port = int(os.getenv("PORT", 8000))
     
-    # Set webhook for production
+    # Determine if we're in production (Render) or development
     webhook_url = os.getenv("WEBHOOK_URL")
+    
     if webhook_url:
-        await bot.application.bot.set_webhook(webhook_url)
-        logger.info(f"✅ Webhook set to: {webhook_url}")
+        # Production with webhook
+        logger.info("🚀 Starting in PRODUCTION mode with webhook")
+        await bot.start_webhook(webhook_url)
     else:
-        logger.warning("No WEBHOOK_URL set - using getUpdates")
+        # Development with polling
+        logger.info("🔧 Starting in DEVELOPMENT mode with polling")
+        await bot.start_polling()
     
     logger.info("✅ Bot initialized and ready!")
     
     yield  # App runs here
     
     # Shutdown
-    if bot.application.running:
-        await bot.application.shutdown()
-        await bot.application.stop()
-    logger.info("Bot shutdown complete.")
+    logger.info("🛑 Shutting down bot...")
+    await bot.shutdown()
+    logger.info("✅ Bot shutdown complete.")
 
 # -------------------------
 # FastAPI app
@@ -878,28 +916,8 @@ async def webhook(request: Request):
         logger.error(f"❌ Webhook error: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
-# For local development with polling
-def main():
-    seed_products()
-    logger.info("Starting bot with polling...")
-    
-    async def run_bot():
-        await bot.application.initialize()
-        await bot.application.start()
-        await bot.application.updater.start_polling()
-        
-        logger.info("Bot is now running...")
-        
-        # Keep the bot running
-        while True:
-            await asyncio.sleep(3600)
-    
-    asyncio.run(run_bot())
-
 if __name__ == "__main__":
-    # If running locally, use polling. If deployed, use webhooks.
-    if os.getenv("RENDER") or os.getenv("WEBHOOK_URL"):
-        # This will be used in deployment
-        pass
-    else:
-        main()
+    import uvicorn
+    
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
