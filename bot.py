@@ -3,6 +3,7 @@ import io
 import qrcode
 import logging
 import asyncio
+import requests
 from datetime import datetime, timedelta
 from typing import Dict, Any
 from contextlib import asynccontextmanager
@@ -27,6 +28,30 @@ from monero_handler import MoneroHandler
 # -------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# -------------------------
+# XMR Price Helper
+# -------------------------
+class XMRPrice:
+    @staticmethod
+    def get_xmr_price() -> float:
+        """Get current XMR to USD price from CoinGecko"""
+        try:
+            response = requests.get(
+                "https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies=usd",
+                timeout=10
+            )
+            data = response.json()
+            return data.get("monero", {}).get("usd", 120.0)  # Default fallback
+        except Exception as e:
+            logger.warning(f"Failed to fetch XMR price: {e}, using default $120")
+            return 120.0  # Fallback price
+
+    @staticmethod
+    def xmr_to_usd(xmr_amount: float) -> float:
+        """Convert XMR to USD"""
+        usd_price = XMRPrice.get_xmr_price()
+        return xmr_amount * usd_price
 
 # -------------------------
 # MoneroBot class
@@ -69,6 +94,11 @@ class MoneroBot:
         if user_id in self.user_states:
             del self.user_states[user_id]
 
+    def format_price_with_usd(self, xmr_amount: float) -> str:
+        """Format XMR price with USD equivalent"""
+        usd_amount = XMRPrice.xmr_to_usd(xmr_amount)
+        return f"{xmr_amount:.6f} XMR (≈${usd_amount:.2f} USD)"
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         await self._register_user(user)
@@ -96,7 +126,10 @@ class MoneroBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+        if update.message:
+            await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+        else:
+            await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
 
     async def show_products(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.clear_user_state(update.effective_user.id)
@@ -105,7 +138,11 @@ class MoneroBot:
             products = session.query(Product).filter(Product.is_available == True).all()
 
             if not products:
-                await update.message.reply_text("❌ No products available at the moment.")
+                message_text = "❌ No products available at the moment."
+                if update.message:
+                    await update.message.reply_text(message_text)
+                else:
+                    await update.callback_query.edit_message_text(message_text)
                 return
 
             text = "💊 **Available Products:**\n\n"
@@ -113,7 +150,7 @@ class MoneroBot:
 
             for product in products:
                 text += f"**{product.name}**\n"
-                text += f"💰 {product.price_xmr:.6f} XMR\n"
+                text += f"💰 {self.format_price_with_usd(product.price_xmr)}\n"
                 if product.description:
                     text += f"📝 {product.description}\n"
                 text += "\n"
@@ -125,7 +162,11 @@ class MoneroBot:
 
             keyboard.append([InlineKeyboardButton("🛒 View Cart", callback_data="view_cart")])
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+            
+            if update.message:
+                await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+            else:
+                await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
     async def show_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -134,10 +175,14 @@ class MoneroBot:
         with Session() as session:
             user = session.query(User).filter(User.telegram_id == user_id).first()
             if not user or not user.cart or not user.cart.cart_items:
-                await update.message.reply_text(
+                message_text = (
                     "🛒 Your cart is empty.\n\n"
                     "Use /products to browse and add items to your cart."
                 )
+                if update.message:
+                    await update.message.reply_text(message_text)
+                else:
+                    await update.callback_query.edit_message_text(message_text)
                 return
 
             cart = user.cart
@@ -150,10 +195,9 @@ class MoneroBot:
                 total_amount += item_total
                 
                 text += f"**{product.name}**\n"
-                text += f"💰 {product.price_xmr:.6f} XMR × {item.quantity} = {item_total:.6f} XMR\n"
-                text += f"🆔 {item.id}\n\n"
+                text += f"💰 {self.format_price_with_usd(product.price_xmr)} × {item.quantity} = {self.format_price_with_usd(item_total)}\n\n"
 
-            text += f"**Total: {total_amount:.6f} XMR**\n\n"
+            text += f"**Total: {self.format_price_with_usd(total_amount)}**\n\n"
 
             keyboard = [
                 [
@@ -164,7 +208,10 @@ class MoneroBot:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+            if update.message:
+                await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+            else:
+                await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
     async def clear_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -175,7 +222,12 @@ class MoneroBot:
                 session.delete(user.cart)
                 session.commit()
             
-            await update.message.reply_text("🗑️ Your cart has been cleared.")
+            message_text = "🗑️ Your cart has been cleared."
+            
+            if update.message:
+                await update.message.reply_text(message_text)
+            else:
+                await update.callback_query.edit_message_text(message_text)
 
     async def show_orders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.clear_user_state(update.effective_user.id)
@@ -183,13 +235,21 @@ class MoneroBot:
         with Session() as session:
             user = session.query(User).filter(User.telegram_id == update.effective_user.id).first()
             if not user:
-                await update.message.reply_text("📋 You don't have any orders yet.")
+                message_text = "📋 You don't have any orders yet."
+                if update.message:
+                    await update.message.reply_text(message_text)
+                else:
+                    await update.callback_query.edit_message_text(message_text)
                 return
 
             orders = session.query(Order).filter(Order.user_id == user.id).order_by(Order.created_at.desc()).limit(10).all()
 
             if not orders:
-                await update.message.reply_text("📋 You don't have any orders yet.")
+                message_text = "📋 You don't have any orders yet."
+                if update.message:
+                    await update.message.reply_text(message_text)
+                else:
+                    await update.callback_query.edit_message_text(message_text)
                 return
 
             text = "📋 **Your Recent Orders:**\n\n"
@@ -204,7 +264,7 @@ class MoneroBot:
                 }
                 
                 text += f"{status_emoji.get(order.status, '📝')} **Order #{order.id}**\n"
-                text += f"💰 {order.total_amount_xmr:.6f} XMR\n"
+                text += f"💰 {self.format_price_with_usd(order.total_amount_xmr)}\n"
                 text += f"📅 {order.created_at.strftime('%Y-%m-%d %H:%M')}\n"
                 text += f"**Status:** {order.status.capitalize()}\n"
                 
@@ -221,12 +281,21 @@ class MoneroBot:
                 [InlineKeyboardButton("🛒 View Cart", callback_data="view_cart")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+            
+            if update.message:
+                await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+            else:
+                await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
     async def cancel_operation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         self.clear_user_state(user_id)
-        await update.message.reply_text("❌ Operation cancelled. Use /start to begin again.")
+        message_text = "❌ Operation cancelled. Use /start to begin again."
+        
+        if update.message:
+            await update.message.reply_text(message_text)
+        else:
+            await update.callback_query.edit_message_text(message_text)
 
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -299,7 +368,7 @@ class MoneroBot:
                 return
 
             text = f"💊 **{product.name}**\n\n"
-            text += f"💰 **Price:** {product.price_xmr:.6f} XMR\n\n"
+            text += f"💰 **Price:** {self.format_price_with_usd(product.price_xmr)}\n\n"
             if product.description:
                 text += f"📝 **Description:** {product.description}\n\n"
             
@@ -335,7 +404,7 @@ class MoneroBot:
 
             await query.edit_message_text(
                 f"🚀 **Proceeding to Checkout**\n\n"
-                f"**Cart Total:** {total_amount:.6f} XMR\n"
+                f"**Cart Total:** {self.format_price_with_usd(total_amount)}\n"
                 f"**Items:** {len(cart.cart_items)}\n\n"
                 "Please provide your shipping information:\n\n"
                 "**Step 1 of 6: Full Name**\n"
@@ -480,12 +549,12 @@ class MoneroBot:
 
             order_summary = "**Order Summary:**\n"
             for item in order.order_items:
-                order_summary += f"• {item.product.name} × {item.quantity} = {item.price_xmr * item.quantity:.6f} XMR\n"
+                order_summary += f"• {item.product.name} × {item.quantity} = {self.format_price_with_usd(item.price_xmr * item.quantity)}\n"
 
             payment_text = (
                 f"💰 **Payment Request**\n\n"
                 f"{order_summary}\n"
-                f"**Total Amount:** {total_amount:.6f} XMR\n\n"
+                f"**Total Amount:** {self.format_price_with_usd(total_amount)}\n\n"
                 f"{shipping_summary}\n\n"
                 "**Instructions:**\n"
                 "1️⃣ Scan the QR code or copy the payment request\n"
@@ -564,7 +633,7 @@ class MoneroBot:
                         f"**Order #** {order.id}\n"
                         f"**Transaction:** `{payment_info.get('tx_hash')}`\n"
                         f"**Confirmations:** {payment_info.get('confirmations')}\n"
-                        f"**Amount:** {payment_info.get('amount', 0.0):.6f} XMR\n"
+                        f"**Amount:** {self.format_price_with_usd(payment_info.get('amount', 0.0))}\n"
                         f"{items_summary}\n"
                         f"{shipping_info}\n\n"
                         "Your order has been confirmed and will be shipped soon! 🎉\n"
@@ -575,7 +644,7 @@ class MoneroBot:
                     pending_text = (
                         f"⏳ **Payment Received - Pending Confirmation**\n\n"
                         f"**Order #** {order.id}\n"
-                        f"**Amount:** {payment_info.get('amount', 0.0):.6f} XMR\n"
+                        f"**Amount:** {self.format_price_with_usd(payment_info.get('amount', 0.0))}\n"
                         f"**Transaction:** `{payment_info.get('tx_hash')}`\n"
                         f"**Confirmations:** {payment_info.get('confirmations', 0)}/{getattr(config, 'CONFIRMATIONS_REQUIRED', 10)}\n\n"
                         "Waiting for more confirmations..."
@@ -597,13 +666,13 @@ class MoneroBot:
 
             text = f"📋 **Order #{order.id}**\n\n"
             text += f"**Status:** {order.status.capitalize()}\n"
-            text += f"**Total:** {order.total_amount_xmr:.6f} XMR\n"
+            text += f"**Total:** {self.format_price_with_usd(order.total_amount_xmr)}\n"
             text += f"**Created:** {order.created_at.strftime('%Y-%m-%d %H:%M')}\n"
             text += f"**Expires:** {order.expires_at.strftime('%Y-%m-%d %H:%M')}\n\n"
             
             text += "**Items:**\n"
             for item in order.order_items:
-                text += f"• {item.product.name} × {item.quantity} = {item.price_xmr * item.quantity:.6f} XMR\n"
+                text += f"• {item.product.name} × {item.quantity} = {self.format_price_with_usd(item.price_xmr * item.quantity)}\n"
             
             text += f"\n**Shipping Address:**\n"
             if order.shipping_address:
@@ -635,7 +704,7 @@ class MoneroBot:
             text = "💊 **Available Products:**\n\n"
             keyboard = []
             for product in products:
-                text += f"**{product.name}**\n💰 {product.price_xmr:.6f} XMR\n"
+                text += f"**{product.name}**\n💰 {self.format_price_with_usd(product.price_xmr)}\n"
                 if product.description:
                     text += f"📝 {product.description}\n"
                 text += "\n"
@@ -834,4 +903,3 @@ if __name__ == "__main__":
         pass
     else:
         main()
-        
