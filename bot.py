@@ -29,7 +29,10 @@ from monero_handler import MoneroHandler
 # -------------------------
 # Logging
 # -------------------------
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # -------------------------
@@ -99,6 +102,7 @@ class MoneroBot:
         self.application.add_handler(CommandHandler("orders", self.show_orders), group=0)
         self.application.add_handler(CommandHandler("clear_cart", self.clear_cart), group=0)
         self.application.add_handler(CommandHandler("cancel", self.cancel_operation), group=0)
+        self.application.add_handler(CommandHandler("debug_state", self.debug_state), group=0)  # Debug command
 
         # Callback & message handlers
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
@@ -130,16 +134,26 @@ class MoneroBot:
             logger.info("Bot shutdown complete")
 
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.error(f"Update {update} caused error {context.error}")
+        logger.error(f"Update {update} caused error {context.error}", exc_info=True)
 
     def get_user_state(self, user_id: int) -> Dict[str, Any]:
         if user_id not in self.user_states:
-            self.user_states[user_id] = {}
+            self.user_states[user_id] = {
+                'created_at': time.time()
+            }
+        else:
+            # Clear state if it's older than 1 hour (stuck prevention)
+            state = self.user_states[user_id]
+            if time.time() - state.get('created_at', 0) > 3600:
+                logger.info(f"Clearing stale state for user {user_id}")
+                self.user_states[user_id] = {'created_at': time.time()}
+        
         return self.user_states[user_id]
 
     def clear_user_state(self, user_id: int):
         if user_id in self.user_states:
             del self.user_states[user_id]
+            logger.info(f"Cleared state for user {user_id}")
 
     def format_price_with_usd(self, xmr_amount: float) -> str:
         usd_amount = XMRPrice.xmr_to_usd(xmr_amount)
@@ -186,6 +200,27 @@ class MoneroBot:
             await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
         else:
             await self._safe_edit(update.callback_query, welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+
+    async def debug_state(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Debug command to check user state"""
+        user_id = update.effective_user.id
+        user_state = self.get_user_state(user_id)
+        
+        debug_info = f"User State Debug:\n"
+        debug_info += f"User ID: {user_id}\n"
+        debug_info += f"State: {user_state}\n"
+        debug_info += f"In checkout lock: {user_id in self._checkout_lock}\n"
+        
+        with Session() as session:
+            user = session.query(User).filter(User.telegram_id == user_id).first()
+            if user and user.cart:
+                debug_info += f"Cart items: {len(user.cart.cart_items)}\n"
+                for item in user.cart.cart_items:
+                    debug_info += f"  - {item.product.name} x {item.quantity}\n"
+            else:
+                debug_info += "No cart found\n"
+        
+        await update.message.reply_text(f"```{debug_info}```", parse_mode="Markdown")
 
     async def show_products(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.clear_user_state(update.effective_user.id)
@@ -297,8 +332,8 @@ class MoneroBot:
 
             text = "Your Recent Orders:\n\n"
             for o in orders:
-                status_emoji = {"pending": "Pending", "paid": "Paid", "confirmed": "Confirmed", "shipped": "Shipped", "completed": "Completed", "expired": "Expired"}
-                text += f"{status_emoji.get(o.status, 'Unknown')} **Order #{o.id}**\n"
+                status_emoji = {"pending": "⏳", "paid": "💰", "confirmed": "✅", "shipped": "🚚", "completed": "🎉", "expired": "❌"}
+                text += f"{status_emoji.get(o.status, '❓')} **Order #{o.id}**\n"
                 text += f"{self.format_price_with_usd(o.total_amount_xmr)}\n"
                 text += f"{o.created_at.strftime('%Y-%m-%d %H:%M')}\n"
                 text += f"**Status:** {o.status.capitalize()}\n"
@@ -445,18 +480,29 @@ class MoneroBot:
             return False, "City too short"
         if step == 'state' and len(value) < 2:
             return False, "State too short"
-        if step == 'zip_code' and (not value.isdigit() or len(value) < 4):
-            return False, "ZIP code must be 4+ digits"
+        if step == 'zip_code':
+            # More flexible ZIP code validation
+            if not value or len(value) < 3:
+                return False, "ZIP code must be at least 3 characters"
+            # Allow alphanumeric for international ZIP codes
+            if not value.replace(' ', '').replace('-', '').isalnum():
+                return False, "ZIP code can only contain letters, numbers, and hyphens"
         return True, ""
 
     async def _collect_shipping_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         user_state = self.get_user_state(user_id)
+        
+        logger.info(f"Processing message for user {user_id}, state: {user_state}")
+        
         if not user_state.get('checkout_flow'):
+            logger.info(f"No checkout flow for user {user_id}")
             return
 
         current_step = user_state.get('current_step')
         text = update.message.text.strip()
+
+        logger.info(f"User {user_id} at step '{current_step}' entered: {text}")
 
         steps = {
             'full_name': {'field': 'full_name', 'next_step': 'street_address', 'prompt': "**Step 2 of 6: Street Address**\nPlease enter your street address:"},
@@ -468,126 +514,149 @@ class MoneroBot:
         }
 
         if current_step not in steps:
+            logger.warning(f"Unknown step '{current_step}' for user {user_id}")
+            await update.message.reply_text("Something went wrong. Please use /cancel and try again.")
+            self.clear_user_state(user_id)
+            self._checkout_lock.discard(user_id)
             return
 
         valid, msg = self._validate_input(current_step, text)
         if not valid:
-            await update.message.reply_text(f"{msg}\nPlease try again:", parse_mode="Markdown")
+            logger.info(f"Validation failed for user {user_id} at step {current_step}: {msg}")
+            await update.message.reply_text(f"❌ {msg}\n\nPlease try again:", parse_mode="Markdown")
             return
 
+        # Store the validated input
         user_state[steps[current_step]['field']] = text
+        logger.info(f"User {user_id} completed step {current_step}")
 
         if steps[current_step]['next_step'] == 'complete':
+            logger.info(f"User {user_id} completed all shipping steps, creating order...")
             await self._create_order_from_cart(update, context)
         else:
             user_state['current_step'] = steps[current_step]['next_step']
             next_prompt = steps[steps[current_step]['next_step']]['prompt']
             if next_prompt:
+                logger.info(f"Moving user {user_id} to step {user_state['current_step']}")
                 await update.message.reply_text(next_prompt, parse_mode="Markdown")
 
     async def _create_order_from_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         user_state = self.get_user_state(user_id)
 
-        with Session() as session:
-            user = session.query(User).filter(User.telegram_id == user_id).first()
-            if not user or not user.cart or not user.cart.cart_items:
-                await update.message.reply_text("Error: Your cart is empty.")
+        try:
+            logger.info(f"Creating order for user {user_id}")
+            
+            with Session() as session:
+                user = session.query(User).filter(User.telegram_id == user_id).first()
+                if not user or not user.cart or not user.cart.cart_items:
+                    error_msg = "Error: Your cart is empty or user not found."
+                    logger.error(error_msg)
+                    await update.message.reply_text(error_msg)
+                    self.clear_user_state(user_id)
+                    self._checkout_lock.discard(user_id)
+                    return
+
+                cart = user.cart
+                total_amount = sum(item.product.price_xmr * item.quantity for item in cart.cart_items)
+                item_count = len(cart.cart_items)
+
+                shipping_address = ShippingAddress(
+                    full_name=user_state['full_name'],
+                    street_address=user_state['street_address'],
+                    apt_number=user_state['apt_number'] if user_state['apt_number'].lower() != 'none' else None,
+                    city=user_state['city'],
+                    state=user_state['state'],
+                    zip_code=user_state['zip_code']
+                )
+                session.add(shipping_address)
+                session.flush()
+
+                payment_data = self.monero.create_payment_request(f"Order #{user.id}", total_amount)
+                if not payment_data:
+                    await update.message.reply_text("Error generating payment. Please try again.")
+                    self.clear_user_state(user_id)
+                    self._checkout_lock.discard(user_id)
+                    return
+
+                order = Order(
+                    user_id=user.id,
+                    total_amount_xmr=total_amount,
+                    payment_address=payment_data.get("integrated_address"),
+                    payment_id=payment_data.get("payment_id"),
+                    payment_request=payment_data.get("payment_request"),
+                    shipping_address_id=shipping_address.id,
+                    expires_at=datetime.utcnow() + timedelta(minutes=30)
+                )
+                session.add(order)
+                session.flush()
+
+                for cart_item in cart.cart_items:
+                    session.add(OrderItem(
+                        order_id=order.id,
+                        product_id=cart_item.product_id,
+                        quantity=cart_item.quantity,
+                        price_xmr=cart_item.product.price_xmr
+                    ))
+
+                session.delete(cart)
+                session.commit()
+
+                qr = qrcode.QRCode(version=1, box_size=8, border=4)
+                qr.add_data(payment_data.get("payment_request"))
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+                bio = io.BytesIO()
+                img.save(bio, "PNG")
+                bio.seek(0)
+
+                shipping_summary = (
+                    f"**Shipping to:**\n"
+                    f"{shipping_address.full_name}\n"
+                    f"{shipping_address.street_address}\n"
+                )
+                if shipping_address.apt_number:
+                    shipping_summary += f"Apt/Unit: {shipping_address.apt_number}\n"
+                shipping_summary += f"{shipping_address.city}, {shipping_address.state} {shipping_address.zip_code}"
+
+                order_summary = ""
+                for item in order.order_items:
+                    order_summary += f"• {item.product.name} × {item.quantity} = {self.format_price_with_usd(item.price_xmr * item.quantity)}\n"
+
+                payment_text = (
+                    f"**Payment Request**\n\n"
+                    f"{order_summary}\n"
+                    f"**Total Amount:** {self.format_price_with_usd(total_amount)}\n\n"
+                    f"{shipping_summary}\n\n"
+                    "**Instructions:**\n"
+                    "1. Scan the QR code or copy the payment request\n"
+                    "2. Use a Monero wallet that supports payment requests\n"
+                    "3. Click \"Check Payment\" after sending\n"
+                    "4. Your order will be shipped after confirmation\n\n"
+                    "Payment expires in 30 minutes"
+                )
+
+                keyboard = [
+                    [InlineKeyboardButton("Check Payment", callback_data=f"check_payment_{order.id}")],
+                    [InlineKeyboardButton("Order Details", callback_data=f"order_details_{order.id}")],
+                    [InlineKeyboardButton("Continue Shopping", callback_data="show_products")],
+                ]
+                await update.message.reply_photo(
+                    photo=bio,
+                    caption=payment_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="Markdown"
+                )
+
+                logger.info(f"Order #{order.id} created successfully for user {user_id}")
                 self.clear_user_state(user_id)
                 self._checkout_lock.discard(user_id)
-                return
 
-            cart = user.cart
-            total_amount = sum(item.product.price_xmr * item.quantity for item in cart.cart_items)
-            item_count = len(cart.cart_items)
-
-            shipping_address = ShippingAddress(
-                full_name=user_state['full_name'],
-                street_address=user_state['street_address'],
-                apt_number=user_state['apt_number'] if user_state['apt_number'].lower() != 'none' else None,
-                city=user_state['city'],
-                state=user_state['state'],
-                zip_code=user_state['zip_code']
+        except Exception as e:
+            logger.error(f"Error creating order for user {user_id}: {e}", exc_info=True)
+            await update.message.reply_text(
+                "❌ An error occurred while creating your order. Please try again or contact support."
             )
-            session.add(shipping_address)
-            session.flush()
-
-            payment_data = self.monero.create_payment_request(f"Order #{user.id}", total_amount)
-            if not payment_data:
-                await update.message.reply_text("Error generating payment. Please try again.")
-                self.clear_user_state(user_id)
-                self._checkout_lock.discard(user_id)
-                return
-
-            order = Order(
-                user_id=user.id,
-                total_amount_xmr=total_amount,
-                payment_address=payment_data.get("integrated_address"),
-                payment_id=payment_data.get("payment_id"),
-                payment_request=payment_data.get("payment_request"),
-                shipping_address_id=shipping_address.id,
-                expires_at=datetime.utcnow() + timedelta(minutes=30)
-            )
-            session.add(order)
-            session.flush()
-
-            for cart_item in cart.cart_items:
-                session.add(OrderItem(
-                    order_id=order.id,
-                    product_id=cart_item.product_id,
-                    quantity=cart_item.quantity,
-                    price_xmr=cart_item.product.price_xmr
-                ))
-
-            session.delete(cart)
-            session.commit()
-
-            qr = qrcode.QRCode(version=1, box_size=8, border=4)
-            qr.add_data(payment_data.get("payment_request"))
-            qr.make(fit=True)
-            img = qr.make_image(fill_color="black", back_color="white")
-            bio = io.BytesIO()
-            img.save(bio, "PNG")
-            bio.seek(0)
-
-            shipping_summary = (
-                f"**Shipping to:**\n"
-                f"{shipping_address.full_name}\n"
-                f"{shipping_address.street_address}\n"
-            )
-            if shipping_address.apt_number:
-                shipping_summary += f"Apt/Unit: {shipping_address.apt_number}\n"
-            shipping_summary += f"{shipping_address.city}, {shipping_address.state} {shipping_address.zip_code}"
-
-            order_summary = ""
-            for item in order.order_items:
-                order_summary += f"• {item.product.name} × {item.quantity} = {self.format_price_with_usd(item.price_xmr * item.quantity)}\n"
-
-            payment_text = (
-                f"**Payment Request**\n\n"
-                f"{order_summary}\n"
-                f"**Total Amount:** {self.format_price_with_usd(total_amount)}\n\n"
-                f"{shipping_summary}\n\n"
-                "**Instructions:**\n"
-                "1. Scan the QR code or copy the payment request\n"
-                "2. Use a Monero wallet that supports payment requests\n"
-                "3. Click \"Check Payment\" after sending\n"
-                "4. Your order will be shipped after confirmation\n\n"
-                "Payment expires in 30 minutes"
-            )
-
-            keyboard = [
-                [InlineKeyboardButton("Check Payment", callback_data=f"check_payment_{order.id}")],
-                [InlineKeyboardButton("Order Details", callback_data=f"order_details_{order.id}")],
-                [InlineKeyboardButton("Continue Shopping", callback_data="show_products")],
-            ]
-            await update.message.reply_photo(
-                photo=bio,
-                caption=payment_text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="Markdown"
-            )
-
             self.clear_user_state(user_id)
             self._checkout_lock.discard(user_id)
 
