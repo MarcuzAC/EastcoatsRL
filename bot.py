@@ -495,49 +495,46 @@ class MoneroBot:
         logger.info(f"Processing message for user {user_id}, state: {user_state}")
         
         if not user_state.get('checkout_flow'):
-            logger.info(f"No checkout flow for user {user_id}")
             return
 
         current_step = user_state.get('current_step')
         text = update.message.text.strip()
 
-        logger.info(f"User {user_id} at step '{current_step}' entered: {text}")
-
         steps = {
-            'full_name': {'field': 'full_name', 'next_step': 'street_address', 'prompt': "Step 2 of 6: Street Address\nPlease enter your street address:"},
-            'street_address': {'field': 'street_address', 'next_step': 'apt_number', 'prompt': "Step 3 of 6: Apartment/Unit Number\nPlease enter your apartment or unit number (or type 'none' if not applicable):"},
-            'apt_number': {'field': 'apt_number', 'next_step': 'city', 'prompt': "Step 4 of 6: City\nPlease enter your city:"},
-            'city': {'field': 'city', 'next_step': 'state', 'prompt': "Step 5 of 6: State\nPlease enter your state:"},
-            'state': {'field': 'state', 'next_step': 'zip_code', 'prompt': "Step 6 of 6: ZIP Code\nPlease enter your ZIP code:"},
-            'zip_code': {'field': 'zip_code', 'next_step': 'complete', 'prompt': None}
+            'full_name':    {'next': 'street_address', 'prompt': "Step 2 of 6: Street Address\nPlease enter your street address:"},
+            'street_address': {'next': 'apt_number', 'prompt': "Step 3 of 6: Apartment/Unit Number\nPlease enter your apartment or unit number (or type 'none'):"},
+            'apt_number':     {'next': 'city',        'prompt': "Step 4 of 6: City\nPlease enter your city:"},
+            'city':           {'next': 'state',       'prompt': "Step 5 of 6: State\nPlease enter your state/province:"},
+            'state':          {'next': 'zip_code',    'prompt': "Step 6 of 6: ZIP/Postal Code\nPlease enter your ZIP or postal code:"},
+            'zip_code':       {'next': 'complete',    'prompt': None},
         }
 
-        if current_step not in steps:
-            logger.warning(f"Unknown step '{current_step}' for user {user_id}")
-            await update.message.reply_text("Something went wrong. Please use /cancel and try again.")
+        step_info = steps.get(current_step)
+        if not step_info:
+            await update.message.reply_text("Something went wrong. Please /cancel and try again.")
             self.clear_user_state(user_id)
-            self._checkout_lock.discard(user_id)
             return
 
         valid, msg = self._validate_input(current_step, text)
         if not valid:
-            logger.info(f"Validation failed for user {user_id} at step {current_step}: {msg}")
-            await update.message.reply_text(f"❌ {msg}\n\nPlease try again:")
+            await update.message.reply_text(f"{msg}\n\nPlease try again:")
             return
 
-        # Store the validated input
-        user_state[steps[current_step]['field']] = text
-        logger.info(f"User {user_id} completed step {current_step}")
+        # Save input
+        field_name = current_step
+        if current_step == 'apt_number' and text.lower() == 'none':
+            user_state[field_name] = None
+        else:
+            user_state[field_name] = text
 
-        if steps[current_step]['next_step'] == 'complete':
-            logger.info(f"User {user_id} completed all shipping steps, creating order...")
+        next_step = step_info['next']
+
+        if next_step == 'complete':
             await self._create_order_from_cart(update, context)
         else:
-            user_state['current_step'] = steps[current_step]['next_step']
-            next_prompt = steps[steps[current_step]['next_step']]['prompt']
-            if next_prompt:
-                logger.info(f"Moving user {user_id} to step {user_state['current_step']}")
-                await update.message.reply_text(next_prompt)
+            user_state['current_step'] = next_step
+            next_prompt = steps[next_step]['prompt']
+            await update.message.reply_text(next_prompt)  # This will now work correctly
 
     async def _create_order_from_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
