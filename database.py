@@ -12,9 +12,9 @@ class User(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
     telegram_id = Column(Integer, unique=True, nullable=False)
-    username = Column(String)
-    first_name = Column(String)
-    last_name = Column(String)
+    username = Column(String(255))
+    first_name = Column(String(255))
+    last_name = Column(String(255))
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
@@ -24,26 +24,26 @@ class User(Base):
 class Product(Base):
     __tablename__ = 'products'
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False)
-    description = Column(String)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
     price_xmr = Column(Float, nullable=False)
-    image_url = Column(String)
+    image_url = Column(String(500))
     is_available = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Relationships - REMOVED the orders relationship since Order no longer has product_id
+    # Relationships
     cart_items = relationship("CartItem", back_populates="product")
     order_items = relationship("OrderItem", back_populates="product")
 
 class ShippingAddress(Base):
     __tablename__ = 'shipping_addresses'
     id = Column(Integer, primary_key=True)
-    full_name = Column(String, nullable=False)
-    street_address = Column(String, nullable=False)
-    apt_number = Column(String)  # Can be null
-    city = Column(String, nullable=False)
-    state = Column(String, nullable=False)
-    zip_code = Column(String, nullable=False)
+    full_name = Column(String(255), nullable=False)
+    street_address = Column(String(500), nullable=False)
+    apt_number = Column(String(100))
+    city = Column(String(100), nullable=False)
+    state = Column(String(100), nullable=False)
+    zip_code = Column(String(20), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
@@ -77,11 +77,11 @@ class Order(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     shipping_address_id = Column(Integer, ForeignKey('shipping_addresses.id'), nullable=False)
-    total_amount_xmr = Column(Float, nullable=False)  # Total for all items in order
-    payment_address = Column(String, nullable=False)
-    payment_id = Column(String)
-    payment_request = Column(Text)  # Store the full payment request
-    status = Column(String, default='pending')  # pending, paid, confirmed, shipped, completed, expired
+    total_amount_xmr = Column(Float, nullable=False)
+    payment_address = Column(String(255), nullable=False)
+    payment_id = Column(String(255))
+    payment_request = Column(Text)
+    status = Column(String(50), default='pending')
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
     paid_at = Column(DateTime)
@@ -99,7 +99,7 @@ class OrderItem(Base):
     order_id = Column(Integer, ForeignKey('orders.id'), nullable=False)
     product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
     quantity = Column(Integer, nullable=False)
-    price_xmr = Column(Float, nullable=False)  # Price at time of order (snapshot)
+    price_xmr = Column(Float, nullable=False)
     
     # Relationships
     order = relationship("Order", back_populates="order_items")
@@ -109,7 +109,7 @@ class Payment(Base):
     __tablename__ = 'payments'
     id = Column(Integer, primary_key=True)
     order_id = Column(Integer, ForeignKey('orders.id'), nullable=False)
-    tx_hash = Column(String)
+    tx_hash = Column(String(255))
     amount_xmr = Column(Float, nullable=False)
     confirmations = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
