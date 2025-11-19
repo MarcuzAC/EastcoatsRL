@@ -394,6 +394,12 @@ class MoneroBot:
         elif data.startswith("order_details_"):
             order_id = int(data[len("order_details_"):])
             await self._show_order_details(update, context, order_id)
+        elif data == "confirm_order_proceed":
+            await self._create_order_from_cart(update, context)
+        elif data == "edit_shipping_info":
+            await self._edit_shipping_info(update, context)
+        elif data == "cancel_order_confirmation":
+            await self.cancel_operation(update, context)
 
     async def _add_to_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE, product_id: int):
         query = update.callback_query
@@ -530,7 +536,7 @@ class MoneroBot:
             'apt_number':     {'next': 'city',        'prompt': "Step 4 of 6: City\nPlease enter your city:"},
             'city':           {'next': 'state',       'prompt': "Step 5 of 6: State\nPlease enter your state/province:"},
             'state':          {'next': 'zip_code',    'prompt': "Step 6 of 6: ZIP/Postal Code\nPlease enter your ZIP or postal code:"},
-            'zip_code':       {'next': 'complete',    'prompt': "Processing your order..."},  # FIXED: Added prompt text
+            'zip_code':       {'next': 'confirm_order','prompt': "Generating order summary..."},  # Changed from 'complete' to 'confirm_order'
         }
 
         step_info = steps.get(current_step)
@@ -553,22 +559,19 @@ class MoneroBot:
 
         next_step = step_info['next']
 
-        if next_step == 'complete':
-            # Send the processing message first
-            await update.message.reply_text("Processing your order...")
-            await self._create_order_from_cart(update, context)
+        if next_step == 'confirm_order':
+            await self._show_order_confirmation(update, context)
         else:
             user_state['current_step'] = next_step
             next_prompt = steps[next_step]['prompt']
             await update.message.reply_text(next_prompt)
 
-    async def _create_order_from_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def _show_order_confirmation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show order summary for user confirmation before payment"""
         user_id = update.effective_user.id
         user_state = self.get_user_state(user_id)
-
+        
         try:
-            logger.info(f"Creating order for user {user_id}")
-            
             with Session() as session:
                 user = session.query(User).filter(User.telegram_id == user_id).first()
                 if not user or not user.cart or not user.cart.cart_items:
@@ -581,22 +584,131 @@ class MoneroBot:
 
                 cart = user.cart
                 total_amount = sum(item.product.price_xmr * item.quantity for item in cart.cart_items)
-                item_count = len(cart.cart_items)
+                
+                # Build order summary
+                shipping_address = f"""
+📦 Shipping Address:
+{user_state['full_name']}
+{user_state['street_address']}
+{user_state['apt_number'] if user_state.get('apt_number') and user_state['apt_number'].lower() != 'none' else ''}
+{user_state['city']}, {user_state['state']} {user_state['zip_code']}
+""".strip()
 
+                # Build items summary
+                items_summary = "🛒 Order Items:\n"
+                for item in cart.cart_items:
+                    subtotal = item.product.price_xmr * item.quantity
+                    items_summary += f"• {item.product.name} × {item.quantity} = {self.format_price_with_usd(subtotal)}\n"
+
+                confirmation_text = f"""
+✅ ORDER CONFIRMATION
+
+{items_summary}
+💰 Total Amount: {self.format_price_with_usd(total_amount)}
+
+{shipping_address}
+
+Please review your order above. Once confirmed, you'll receive payment instructions.
+
+⚠️ Important:
+• Double-check your shipping address
+• Ensure all items are correct
+• Payments are processed with Monero (XMR)
+• Order cannot be changed after confirmation
+                """.strip()
+
+                keyboard = [
+                    [InlineKeyboardButton("✅ Confirm Order", callback_data="confirm_order_proceed")],
+                    [InlineKeyboardButton("✏️ Edit Shipping", callback_data="edit_shipping_info")],
+                    [InlineKeyboardButton("❌ Cancel Order", callback_data="cancel_order_confirmation")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                # Update user state to wait for confirmation
+                user_state['current_step'] = 'waiting_confirmation'
+                user_state['shipping_info'] = {
+                    'full_name': user_state['full_name'],
+                    'street_address': user_state['street_address'],
+                    'apt_number': user_state.get('apt_number'),
+                    'city': user_state['city'],
+                    'state': user_state['state'],
+                    'zip_code': user_state['zip_code']
+                }
+
+                await update.message.reply_text(confirmation_text, reply_markup=reply_markup)
+
+        except Exception as e:
+            logger.error(f"Error showing order confirmation for user {user_id}: {e}", exc_info=True)
+            await update.message.reply_text(
+                "❌ An error occurred while preparing your order. Please try again or contact support."
+            )
+            self.clear_user_state(user_id)
+            self._checkout_lock.discard(user_id)
+
+    async def _edit_shipping_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Allow user to edit shipping information"""
+        query = update.callback_query
+        user_id = query.from_user.id
+        user_state = self.get_user_state(user_id)
+        
+        # Reset to first step of shipping info
+        user_state['current_step'] = 'full_name'
+        user_state['checkout_flow'] = True
+        
+        # Clear previously entered shipping info
+        for field in ['full_name', 'street_address', 'apt_number', 'city', 'state', 'zip_code']:
+            user_state.pop(field, None)
+        
+        await self._safe_edit(
+            query,
+            "✏️ Editing Shipping Information\n\n"
+            "Let's update your shipping details. Please start with your full name:",
+        )
+
+    async def _create_order_from_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Create order after user confirmation - updated to work with both message and callback"""
+        user_id = update.effective_user.id if update.message else update.callback_query.from_user.id
+        user_state = self.get_user_state(user_id)
+
+        try:
+            logger.info(f"Creating order for user {user_id}")
+            
+            with Session() as session:
+                user = session.query(User).filter(User.telegram_id == user_id).first()
+                if not user or not user.cart or not user.cart.cart_items:
+                    error_msg = "Error: Your cart is empty or user not found."
+                    logger.error(error_msg)
+                    if update.message:
+                        await update.message.reply_text(error_msg)
+                    else:
+                        await update.callback_query.message.reply_text(error_msg)
+                    self.clear_user_state(user_id)
+                    self._checkout_lock.discard(user_id)
+                    return
+
+                cart = user.cart
+                total_amount = sum(item.product.price_xmr * item.quantity for item in cart.cart_items)
+
+                # Use shipping info from user state
+                shipping_info = user_state.get('shipping_info', {})
                 shipping_address = ShippingAddress(
-                    full_name=user_state['full_name'],
-                    street_address=user_state['street_address'],
-                    apt_number=user_state['apt_number'] if user_state['apt_number'].lower() != 'none' else None,
-                    city=user_state['city'],
-                    state=user_state['state'],
-                    zip_code=user_state['zip_code']
+                    full_name=shipping_info['full_name'],
+                    street_address=shipping_info['street_address'],
+                    apt_number=shipping_info.get('apt_number'),
+                    city=shipping_info['city'],
+                    state=shipping_info['state'],
+                    zip_code=shipping_info['zip_code']
                 )
                 session.add(shipping_address)
                 session.flush()
 
                 payment_data = self.monero.create_payment_request(f"Order #{user.id}", total_amount)
                 if not payment_data:
-                    await update.message.reply_text("Error generating payment. Please try again.")
+                    error_msg = "Error generating payment. Please try again."
+                    if update.message:
+                        await update.message.reply_text(error_msg)
+                    else:
+                        await update.callback_query.message.reply_text(error_msg)
                     self.clear_user_state(user_id)
                     self._checkout_lock.discard(user_id)
                     return
@@ -624,6 +736,7 @@ class MoneroBot:
                 session.delete(cart)
                 session.commit()
 
+                # Generate QR code and send payment instructions
                 qr = qrcode.QRCode(version=1, box_size=8, border=4)
                 qr.add_data(payment_data.get("payment_request"))
                 qr.make(fit=True)
@@ -663,11 +776,20 @@ class MoneroBot:
                     [InlineKeyboardButton("📦 Order Details", callback_data=f"order_details_{order.id}")],
                     [InlineKeyboardButton("🛍️ Continue Shopping", callback_data="show_products")],
                 ]
-                await update.message.reply_photo(
-                    photo=bio,
-                    caption=payment_text,
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
+                
+                if update.message:
+                    await update.message.reply_photo(
+                        photo=bio,
+                        caption=payment_text,
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                else:
+                    # If coming from callback query, edit the existing message
+                    await update.callback_query.message.reply_photo(
+                        photo=bio,
+                        caption=payment_text,
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
 
                 logger.info(f"Order #{order.id} created successfully for user {user_id}")
                 self.clear_user_state(user_id)
@@ -675,9 +797,11 @@ class MoneroBot:
 
         except Exception as e:
             logger.error(f"Error creating order for user {user_id}: {e}", exc_info=True)
-            await update.message.reply_text(
-                "❌ An error occurred while creating your order. Please try again or contact support."
-            )
+            error_msg = "❌ An error occurred while creating your order. Please try again or contact support."
+            if update.message:
+                await update.message.reply_text(error_msg)
+            else:
+                await update.callback_query.message.reply_text(error_msg)
             self.clear_user_state(user_id)
             self._checkout_lock.discard(user_id)
 
