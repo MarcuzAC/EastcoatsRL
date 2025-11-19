@@ -175,18 +175,18 @@ class MoneroBot:
         self._checkout_lock.discard(user.id)
 
         welcome_text = (
-            "🌟 *Welcome to Crypto Pharmacy Bot!* 🌟\n\n"
-            "• *Browse Products*: Use /products to see available medications\n"
-            "• *Add to Cart*: Build your order with multiple items\n"
-            "• *Pay with Monero*: Secure and private cryptocurrency payments\n"
-            "• *Discreet Shipping*: Professional packaging and delivery\n\n"
-            "*Commands:*\n"
-            "📋 /products - Browse available products\n"
-            "🛒 /cart - View your cart\n"
-            "🗑️ /clear_cart - Empty your cart\n"
-            "📦 /orders - View your orders\n"
-            "❌ /cancel - Cancel current operation\n\n"
-            "Start shopping now! 🛍️"
+            "🌟 Welcome to Crypto Pharmacy Bot! 🌟\n\n"
+            "• Browse Products: Use /products to see available medications\n"
+            "• Add to Cart: Build your order with multiple items\n"
+            "• Pay with Monero: Secure and private cryptocurrency payments\n"
+            "• Discreet Shipping: Professional packaging and delivery\n\n"
+            "Commands:\n"
+            "/products - Browse available products\n"
+            "/cart - View your cart\n"
+            "/clear_cart - Empty your cart\n"
+            "/orders - View your orders\n"
+            "/cancel - Cancel current operation\n\n"
+            "Start shopping now!"
         )
 
         keyboard = [
@@ -197,9 +197,9 @@ class MoneroBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         if update.message:
-            await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.message.reply_text(welcome_text, reply_markup=reply_markup)
         else:
-            await self._safe_edit(update.callback_query, welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+            await self._safe_edit(update.callback_query, welcome_text, reply_markup=reply_markup)
 
     async def debug_state(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Debug command to check user state"""
@@ -237,10 +237,10 @@ class MoneroBot:
                     await self._safe_edit(update.callback_query, msg)
                 return
 
-            text = "📋 *Available Products:*\n\n"
+            text = "📋 Available Products:\n\n"
             keyboard = []
             for p in products:
-                text += f"*{p.name}*\n"
+                text += f"{p.name}\n"
                 text += f"💎 {self.format_price_with_usd(p.price_xmr)}\n"
                 if p.description:
                     text += f"📝 {p.description}\n"
@@ -253,9 +253,9 @@ class MoneroBot:
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             if update.message:
-                await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+                await update.message.reply_text(text, reply_markup=reply_markup)
             else:
-                await self._safe_edit(update.callback_query, text, reply_markup=reply_markup, parse_mode="Markdown")
+                await self._safe_edit(update.callback_query, text, reply_markup=reply_markup)
 
     async def show_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -273,13 +273,13 @@ class MoneroBot:
 
             cart = user.cart
             total = sum(item.product.price_xmr * item.quantity for item in cart.cart_items)
-            text = "🛒 *Your Shopping Cart*\n\n"
+            text = "🛒 Your Shopping Cart\n\n"
             for item in cart.cart_items:
                 p = item.product
                 subtotal = p.price_xmr * item.quantity
-                text += f"*{p.name}*\n"
+                text += f"{p.name}\n"
                 text += f"💎 {self.format_price_with_usd(p.price_xmr)} × {item.quantity} = {self.format_price_with_usd(subtotal)}\n\n"
-            text += f"*💰 Total: {self.format_price_with_usd(total)}*\n\n"
+            text += f"💰 Total: {self.format_price_with_usd(total)}\n\n"
 
             keyboard = [
                 [InlineKeyboardButton("📋 Add More Items", callback_data="show_products"),
@@ -289,9 +289,9 @@ class MoneroBot:
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             if update.message:
-                await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+                await update.message.reply_text(text, reply_markup=reply_markup)
             else:
-                await self._safe_edit(update.callback_query, text, reply_markup=reply_markup, parse_mode="Markdown")
+                await self._safe_edit(update.callback_query, text, reply_markup=reply_markup)
 
     async def clear_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -330,16 +330,16 @@ class MoneroBot:
                     await self._safe_edit(update.callback_query, msg)
                 return
 
-            text = "📦 *Your Recent Orders:*\n\n"
+            text = "📦 Your Recent Orders:\n\n"
             for o in orders:
                 status_emoji = {"pending": "⏳", "paid": "💰", "confirmed": "✅", "shipped": "🚚", "completed": "🎉", "expired": "❌"}
-                text += f"{status_emoji.get(o.status, '❓')} *Order #{o.id}*\n"
+                text += f"{status_emoji.get(o.status, '❓')} Order #{o.id}\n"
                 text += f"💎 {self.format_price_with_usd(o.total_amount_xmr)}\n"
                 text += f"📅 {o.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                text += f"*Status:* {o.status.capitalize()}\n"
-                text += f"*Items:* {len(o.order_items)}\n"
+                text += f"Status: {o.status.capitalize()}\n"
+                text += f"Items: {len(o.order_items)}\n"
                 if o.shipping_address:
-                    text += f"*Shipping:* {o.shipping_address.city}, {o.shipping_address.state}\n"
+                    text += f"Shipping: {o.shipping_address.city}, {o.shipping_address.state}\n"
                 text += "\n"
 
             keyboard = [
@@ -349,9 +349,9 @@ class MoneroBot:
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             if update.message:
-                await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+                await update.message.reply_text(text, reply_markup=reply_markup)
             else:
-                await self._safe_edit(update.callback_query, text, reply_markup=reply_markup, parse_mode="Markdown")
+                await self._safe_edit(update.callback_query, text, reply_markup=reply_markup)
 
     async def cancel_operation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -423,16 +423,16 @@ class MoneroBot:
             if not product:
                 await query.answer("Product not found")
                 return
-            text = f"*{product.name}*\n\n"
-            text += f"*💰 Price:* {self.format_price_with_usd(product.price_xmr)}\n\n"
+            text = f"{product.name}\n\n"
+            text += f"💰 Price: {self.format_price_with_usd(product.price_xmr)}\n\n"
             if product.description:
-                text += f"*📝 Description:* {product.description}\n\n"
+                text += f"📝 Description: {product.description}\n\n"
             text += "Available for one-time purchase."
             keyboard = [
                 [InlineKeyboardButton("➕ Add to Cart", callback_data=f"add_to_cart_{product.id}")],
                 [InlineKeyboardButton("⬅️ Back to Products", callback_data="show_products")],
             ]
-            await self._safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await self._safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     async def _start_checkout(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -461,13 +461,12 @@ class MoneroBot:
 
             await self._safe_edit(
                 query,
-                f"🚀 *Proceeding to Checkout*\n\n"
-                f"*💰 Cart Total:* {self.format_price_with_usd(total_amount)}\n"
-                f"*📦 Items:* {len(cart.cart_items)}\n\n"
+                f"🚀 Proceeding to Checkout\n\n"
+                f"💰 Cart Total: {self.format_price_with_usd(total_amount)}\n"
+                f"📦 Items: {len(cart.cart_items)}\n\n"
                 "Please provide your shipping information:\n\n"
-                "*Step 1 of 6: Full Name*\n"
-                "Please enter your full name:",
-                parse_mode="Markdown"
+                "Step 1 of 6: Full Name\n"
+                "Please enter your full name:"
             )
 
     def _validate_input(self, step: str, value: str) -> tuple[bool, str]:
@@ -505,11 +504,11 @@ class MoneroBot:
         logger.info(f"User {user_id} at step '{current_step}' entered: {text}")
 
         steps = {
-            'full_name': {'field': 'full_name', 'next_step': 'street_address', 'prompt': "*Step 2 of 6: Street Address*\nPlease enter your street address:"},
-            'street_address': {'field': 'street_address', 'next_step': 'apt_number', 'prompt': "*Step 3 of 6: Apartment/Unit Number*\nPlease enter your apartment or unit number (or type 'none' if not applicable):"},
-            'apt_number': {'field': 'apt_number', 'next_step': 'city', 'prompt': "*Step 4 of 6: City*\nPlease enter your city:"},
-            'city': {'field': 'city', 'next_step': 'state', 'prompt': "*Step 5 of 6: State*\nPlease enter your state:"},
-            'state': {'field': 'state', 'next_step': 'zip_code', 'prompt': "*Step 6 of 6: ZIP Code*\nPlease enter your ZIP code:"},
+            'full_name': {'field': 'full_name', 'next_step': 'street_address', 'prompt': "Step 2 of 6: Street Address\nPlease enter your street address:"},
+            'street_address': {'field': 'street_address', 'next_step': 'apt_number', 'prompt': "Step 3 of 6: Apartment/Unit Number\nPlease enter your apartment or unit number (or type 'none' if not applicable):"},
+            'apt_number': {'field': 'apt_number', 'next_step': 'city', 'prompt': "Step 4 of 6: City\nPlease enter your city:"},
+            'city': {'field': 'city', 'next_step': 'state', 'prompt': "Step 5 of 6: State\nPlease enter your state:"},
+            'state': {'field': 'state', 'next_step': 'zip_code', 'prompt': "Step 6 of 6: ZIP Code\nPlease enter your ZIP code:"},
             'zip_code': {'field': 'zip_code', 'next_step': 'complete', 'prompt': None}
         }
 
@@ -523,7 +522,7 @@ class MoneroBot:
         valid, msg = self._validate_input(current_step, text)
         if not valid:
             logger.info(f"Validation failed for user {user_id} at step {current_step}: {msg}")
-            await update.message.reply_text(f"❌ {msg}\n\nPlease try again:", parse_mode="Markdown")
+            await update.message.reply_text(f"❌ {msg}\n\nPlease try again:")
             return
 
         # Store the validated input
@@ -538,7 +537,7 @@ class MoneroBot:
             next_prompt = steps[steps[current_step]['next_step']]['prompt']
             if next_prompt:
                 logger.info(f"Moving user {user_id} to step {user_state['current_step']}")
-                await update.message.reply_text(next_prompt, parse_mode="Markdown")
+                await update.message.reply_text(next_prompt)
 
     async def _create_order_from_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -611,7 +610,7 @@ class MoneroBot:
                 bio.seek(0)
 
                 shipping_summary = (
-                    f"*📦 Shipping to:*\n"
+                    f"📦 Shipping to:\n"
                     f"{shipping_address.full_name}\n"
                     f"{shipping_address.street_address}\n"
                 )
@@ -624,11 +623,11 @@ class MoneroBot:
                     order_summary += f"• {item.product.name} × {item.quantity} = {self.format_price_with_usd(item.price_xmr * item.quantity)}\n"
 
                 payment_text = (
-                    f"*💰 Payment Request*\n\n"
+                    f"💰 Payment Request\n\n"
                     f"{order_summary}\n"
-                    f"*💰 Total Amount:* {self.format_price_with_usd(total_amount)}\n\n"
+                    f"💰 Total Amount: {self.format_price_with_usd(total_amount)}\n\n"
                     f"{shipping_summary}\n\n"
-                    "*📋 Instructions:*\n"
+                    "📋 Instructions:\n"
                     "1. Scan the QR code or copy the payment request\n"
                     "2. Use a Monero wallet that supports payment requests\n"
                     "3. Click \"Check Payment\" after sending\n"
@@ -644,8 +643,7 @@ class MoneroBot:
                 await update.message.reply_photo(
                     photo=bio,
                     caption=payment_text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode="Markdown"
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
 
                 logger.info(f"Order #{order.id} created successfully for user {user_id}")
@@ -686,40 +684,38 @@ class MoneroBot:
                 ))
                 session.commit()
 
-                items_summary = "*📦 Order Items:*\n"
+                items_summary = "📦 Order Items:\n"
                 for item in order.order_items:
                     items_summary += f"• {item.product.name} × {item.quantity}\n"
 
                 shipping_info = ""
                 if order.shipping_address:
                     a = order.shipping_address
-                    shipping_info = f"\n*📦 Shipping Address:*\n{a.full_name}\n{a.street_address}\n"
+                    shipping_info = f"\n📦 Shipping Address:\n{a.full_name}\n{a.street_address}\n"
                     if a.apt_number:
                         shipping_info += f"{a.apt_number}\n"
                     shipping_info += f"{a.city}, {a.state} {a.zip_code}"
 
                 await self._safe_edit(
                     query,
-                    f"✅ *Payment Confirmed!*\n\n"
-                    f"*📦 Order #* {order.id}\n"
-                    f"*🔗 Transaction:* `{payment_info.get('tx_hash')}`\n"
-                    f"*✅ Confirmations:* {payment_info.get('confirmations')}\n"
-                    f"*💰 Amount:* {self.format_price_with_usd(payment_info.get('amount', 0.0))}\n"
+                    f"✅ Payment Confirmed!\n\n"
+                    f"📦 Order # {order.id}\n"
+                    f"🔗 Transaction: {payment_info.get('tx_hash')}\n"
+                    f"✅ Confirmations: {payment_info.get('confirmations')}\n"
+                    f"💰 Amount: {self.format_price_with_usd(payment_info.get('amount', 0.0))}\n"
                     f"{items_summary}\n{shipping_info}\n\n"
-                    "Your order will be shipped soon!",
-                    parse_mode="Markdown"
+                    "Your order will be shipped soon!"
                 )
             elif payment_info:
                 await self._safe_edit(
                     query,
-                    f"⏳ *Payment Received - Pending*\n\n"
-                    f"*📦 Order #* {order.id}\n"
-                    f"*💰 Amount:* {self.format_price_with_usd(payment_info.get('amount', 0.0))}\n"
-                    f"*🔗 Tx:* `{payment_info.get('tx_hash')}`\n"
-                    f"*✅ Confirmations:* {payment_info.get('confirmations', 0)}/{getattr(config, 'CONFIRMATIONS_REQUIRED', 10)}\n\n"
+                    f"⏳ Payment Received - Pending\n\n"
+                    f"📦 Order # {order.id}\n"
+                    f"💰 Amount: {self.format_price_with_usd(payment_info.get('amount', 0.0))}\n"
+                    f"🔗 Tx: {payment_info.get('tx_hash')}\n"
+                    f"✅ Confirmations: {payment_info.get('confirmations', 0)}/{getattr(config, 'CONFIRMATIONS_REQUIRED', 10)}\n\n"
                     "Waiting for confirmations...",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Check Again", callback_data=f"check_payment_{order.id}")]]),
-                    parse_mode="Markdown"
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Check Again", callback_data=f"check_payment_{order.id}")]])
                 )
             else:
                 await query.answer("No payment received yet.")
@@ -731,15 +727,15 @@ class MoneroBot:
             if not order:
                 await query.answer("Order not found")
                 return
-            text = f"*📦 Order #{order.id}*\n\n"
-            text += f"*📊 Status:* {order.status.capitalize()}\n"
-            text += f"*💰 Total:* {self.format_price_with_usd(order.total_amount_xmr)}\n"
-            text += f"*📅 Created:* {order.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-            text += f"*⏰ Expires:* {order.expires_at.strftime('%Y-%m-%d %H:%M')}\n\n"
-            text += "*📦 Items:*\n"
+            text = f"📦 Order #{order.id}\n\n"
+            text += f"📊 Status: {order.status.capitalize()}\n"
+            text += f"💰 Total: {self.format_price_with_usd(order.total_amount_xmr)}\n"
+            text += f"📅 Created: {order.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+            text += f"⏰ Expires: {order.expires_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+            text += "📦 Items:\n"
             for item in order.order_items:
                 text += f"• {item.product.name} × {item.quantity} = {self.format_price_with_usd(item.price_xmr * item.quantity)}\n"
-            text += f"\n*📦 Shipping Address:*\n"
+            text += f"\n📦 Shipping Address:\n"
             if order.shipping_address:
                 a = order.shipping_address
                 text += f"{a.full_name}\n{a.street_address}\n"
@@ -750,7 +746,7 @@ class MoneroBot:
                 [InlineKeyboardButton("🔍 Check Payment", callback_data=f"check_payment_{order.id}")],
                 [InlineKeyboardButton("📦 All Orders", callback_data="my_orders")],
             ]
-            await self._safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await self._safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     async def _register_user(self, telegram_user):
         with Session() as session:
@@ -784,6 +780,7 @@ class MoneroBot:
 async def expire_old_orders(context: ContextTypes.DEFAULT_TYPE):
     """Fixed function with context parameter"""
     try:
+        logger.info("Running expire_old_orders job")
         with Session() as session:
             expired = session.query(Order).filter(
                 Order.status == "pending",
