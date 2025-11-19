@@ -398,21 +398,45 @@ class MoneroBot:
     async def _add_to_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE, product_id: int):
         query = update.callback_query
         user_id = query.from_user.id
+        
         with Session() as session:
+            # First, ensure the user exists in the database
             user = session.query(User).filter(User.telegram_id == user_id).first()
+            if not user:
+                # Register the user if they don't exist
+                user = User(
+                    telegram_id=user_id,
+                    username=query.from_user.username,
+                    first_name=query.from_user.first_name,
+                    last_name=query.from_user.last_name,
+                    created_at=datetime.utcnow(),
+                )
+                session.add(user)
+                session.flush()  # Flush to get the user ID
+            
+            # Now get the product
             product = session.query(Product).filter(Product.id == product_id).first()
             if not product:
                 await query.answer("Product not found")
                 return
+            
+            # Ensure user has a cart
             if not user.cart:
                 user.cart = Cart()
                 session.add(user.cart)
                 session.flush()
-            existing = session.query(CartItem).filter(CartItem.cart_id == user.cart.id, CartItem.product_id == product_id).first()
+            
+            # Add item to cart
+            existing = session.query(CartItem).filter(
+                CartItem.cart_id == user.cart.id, 
+                CartItem.product_id == product_id
+            ).first()
+            
             if existing:
                 existing.quantity += 1
             else:
                 session.add(CartItem(cart_id=user.cart.id, product_id=product_id, quantity=1))
+            
             session.commit()
             await query.answer(f"✅ {product.name} added to cart!")
 
@@ -534,7 +558,7 @@ class MoneroBot:
         else:
             user_state['current_step'] = next_step
             next_prompt = steps[next_step]['prompt']
-            await update.message.reply_text(next_prompt)  # This will now work correctly
+            await update.message.reply_text(next_prompt)
 
     async def _create_order_from_cart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
