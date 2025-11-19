@@ -530,7 +530,7 @@ class MoneroBot:
             'apt_number':     {'next': 'city',        'prompt': "Step 4 of 6: City\nPlease enter your city:"},
             'city':           {'next': 'state',       'prompt': "Step 5 of 6: State\nPlease enter your state/province:"},
             'state':          {'next': 'zip_code',    'prompt': "Step 6 of 6: ZIP/Postal Code\nPlease enter your ZIP or postal code:"},
-            'zip_code':       {'next': 'complete',    'prompt': None},
+            'zip_code':       {'next': 'complete',    'prompt': "Processing your order..."},  # FIXED: Added prompt text
         }
 
         step_info = steps.get(current_step)
@@ -554,6 +554,8 @@ class MoneroBot:
         next_step = step_info['next']
 
         if next_step == 'complete':
+            # Send the processing message first
+            await update.message.reply_text("Processing your order...")
             await self._create_order_from_cart(update, context)
         else:
             user_state['current_step'] = next_step
